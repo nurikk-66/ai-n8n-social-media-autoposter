@@ -1,0 +1,266 @@
+{
+  "name": "AI Social Media Auto-Poster",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * 1,3,5"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Content Queue",
+          "mode": "name"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "Status",
+              "lookupValue": "Pending"
+            }
+          ]
+        },
+        "options": {
+          "returnFirstMatch": true
+        }
+      },
+      "id": "get-topic",
+      "name": "Get Next Topic",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [460, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a social media content expert. Create engaging posts for LinkedIn and Twitter/X.\n\nFor LinkedIn: Professional tone, 150-200 words, include insights, end with a question to boost engagement. Add 3-5 relevant hashtags.\n\nFor Twitter/X: Punchy, under 250 characters, hook in first line, 2-3 hashtags.\n\nReturn ONLY a JSON object with two fields: linkedin_post and twitter_post. No markdown, no explanation.",
+              "role": "system"
+            },
+            {
+              "content": "=Topic: {{ $json.Topic }}\nIndustry: {{ $json.Industry || 'Business' }}\nTone: {{ $json.Tone || 'Professional' }}\nExtra context: {{ $json.Notes || 'None' }}\n\nCreate engaging posts for both platforms."
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 600
+        }
+      },
+      "id": "generate-content",
+      "name": "Generate Posts",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1,
+      "position": [680, 300],
+      "credentials": {
+        "openAiApi": {
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const aiText = $input.first().json.message?.content || '{}';\nlet posts = {};\n\ntry {\n  posts = JSON.parse(aiText);\n} catch(e) {\n  const text = aiText.replace(/```json|```/g, '').trim();\n  try {\n    posts = JSON.parse(text);\n  } catch(e2) {\n    posts = {\n      linkedin_post: aiText,\n      twitter_post: aiText.substring(0, 250)\n    };\n  }\n}\n\nconst topicData = $('Get Next Topic').first().json;\n\nreturn [{\n  json: {\n    linkedin_post: posts.linkedin_post || '',\n    twitter_post: posts.twitter_post || '',\n    topic: topicData.Topic,\n    rowIndex: topicData.row_number || 2,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "parse-posts",
+      "name": "Parse Posts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "person": "urn:li:person:YOUR_LINKEDIN_PERSON_ID",
+        "text": "={{ $json.linkedin_post }}",
+        "additionalFields": {}
+      },
+      "id": "post-linkedin",
+      "name": "Post to LinkedIn",
+      "type": "n8n-nodes-base.linkedIn",
+      "typeVersion": 1,
+      "position": [1120, 200],
+      "credentials": {
+        "linkedInOAuth2Api": {
+          "name": "LinkedIn OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://api.twitter.com/2/tweets",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth1Api",
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "={{ $('Parse Posts').first().json.twitter_post }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "post-twitter",
+      "name": "Post to Twitter/X",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 400],
+      "credentials": {
+        "oAuth1Api": {
+          "name": "Twitter OAuth1"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Content Queue",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Status": "Posted",
+            "LinkedIn_Post": "={{ $('Parse Posts').first().json.linkedin_post }}",
+            "Twitter_Post": "={{ $('Parse Posts').first().json.twitter_post }}",
+            "Posted_At": "={{ $('Parse Posts').first().json.timestamp }}"
+          },
+          "matchingColumns": ["Topic"],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "update-status",
+      "name": "Mark as Posted",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1340, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Next Topic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Next Topic": {
+      "main": [
+        [
+          {
+            "node": "Generate Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Posts": {
+      "main": [
+        [
+          {
+            "node": "Parse Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Posts": {
+      "main": [
+        [
+          {
+            "node": "Post to LinkedIn",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Post to Twitter/X",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post to LinkedIn": {
+      "main": [
+        [
+          {
+            "node": "Mark as Posted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "instanceId": "ai-social-autoposter-v1"
+  },
+  "pinData": {},
+  "tags": [
+    {
+      "name": "AI",
+      "createdAt": "2026-04-17T00:00:00.000Z"
+    },
+    {
+      "name": "Social Media",
+      "createdAt": "2026-04-17T00:00:00.000Z"
+    },
+    {
+      "name": "Automation",
+      "createdAt": "2026-04-17T00:00:00.000Z"
+    }
+  ]
+}
